@@ -1,0 +1,352 @@
+<?php
+	/**
+	 * @author			Matthias Reuter ($LastChangedBy: matthias $)
+	 * @version			$LastChangedDate: 2009-08-26 19:19:41 +0200 (Mi, 26 Aug 2009) $
+	 * @package			poll
+	 * @copyright		2007-2009 IPBWI development team
+	 * @link			http://ipbwi.com/examples/poll.php
+	 * @since			2.0
+	 * @license			http://www.gnu.org/licenses/gpl-3.0.html GNU General Public License
+	 */
+	class ipbwi_poll extends ipbwi {
+		private $ipbwi			= null;
+		/**
+		 * @desc			Loads and checks different vars when class is initiating
+		 * @author			Matthias Reuter
+		 * @since			2.0
+		 * @ignore
+		 */
+		public function __construct($ipbwi){
+			// loads common classes
+			$this->ipbwi = $ipbwi;
+		}
+		/**
+		 * @desc			Returns whether a member has voted in the poll in a topic.
+		 * @param	int		$topicID Topic ID of the Poll
+		 * @param	int		$memberID If $memberID is ommitted the last known member is used.
+		 * @return	mixed	Poll Vote Date if voted, false otherwise
+		 * @author			Matthias Reuter
+		 * @author			Pita <peter@randomnity.com>
+		 * @author			Cow <khlo@global-centre.com>
+		 * @sample
+		 * <code>
+		 * $ipbwi->poll->voted(55,77);
+		 * </code>
+		 * @since			2.0
+		 */
+		public function voted($topicID, $memberID = false){
+			if(!$memberID){
+				$memberID = self::$ips->member['id'];
+			}
+			self::$ips->DB->query('SELECT vote_date FROM ibf_voters WHERE tid="'.$topicID.'" AND member_id="'.$memberID.'"');
+			if($row = self::$ips->DB->fetch_row()){
+				return $row['vote_date'];
+			}else{
+				return false;
+			}
+		}
+		/**
+		 * @desc			Returns information on a poll.
+		 * @param	int		$topicID Topic ID of the Poll
+		 * @return	array	Poll Information
+		 * @author			Matthias Reuter
+		 * @author			Pita <peter@randomnity.com>
+		 * @author			Cow <khlo@global-centre.com>
+		 * @sample
+		 * <code>
+		 * $ipbwi->poll->info(55);
+		 * </code>
+		 * @since			2.0
+		 */
+		public function info($topicID){
+			if($cache = $this->ipbwi->cache->get('pollInfo', $topicID)){
+				return $cache;
+			}else{
+				self::$ips->DB->query('SELECT p.pid, p.tid, p.start_date, p.choices, p.starter_id, m.name AS starter_name, p.votes, p.forum_id, p.poll_question FROM ibf_polls p LEFT JOIN ibf_members m ON (p.starter_id=m.id) WHERE p.tid="'.$topicID.'"');
+				if($row = self::$ips->DB->fetch_row()){
+					$choices = unserialize(stripslashes($row['choices']));
+					$row['choices'] = array();
+					// Make choices more readable... mainly for b/w compat
+					foreach($choices as $k => $i){
+						$row['choices'][$k]['question'] = $i['question'];
+						$row['choices'][$k]['multi'] = $i['multi'];
+						foreach($i['choice'] as $c => $d){
+							$row['choices'][$k][$c] = array('option_id' => $c,
+								'option_title' => $d,
+								'votes' => $i['votes'][$c],
+								'percentage' => array_sum($i['votes']) ? intval(($i['votes'][$c] / array_sum($i['votes'])) * 100) : '0',
+							);
+						}
+					}
+					// I think leaving this as 'poll_question' is silly...
+					$row['title'] = $row['poll_question'];
+					$this->ipbwi->cache->save('pollInfo', $topicID, $row);
+					return $row;
+				}else{
+					return false;
+				}
+			}
+		}
+		/**
+		 * @desc			Returns total number of votes in a poll.
+		 * @param	int		$topicID Topic ID of the Poll
+		 * @return	int		Poll Votes
+		 * @author			Matthias Reuter
+		 * @author			Pita <peter@randomnity.com>
+		 * @author			Cow <khlo@global-centre.com>
+		 * @sample
+		 * <code>
+		 * $ipbwi->poll->totalVotes(55);
+		 * </code>
+		 * @since			2.0
+		 */
+		public function totalVotes($topicID){
+			if($info = $this->info($topicID)){
+				return $info['votes'];
+			}else{
+				return false;
+			}
+		}
+		/**
+		 * @desc			Returns Topic ID associated with Poll ID.
+		 * @param	int		$pollID Poll ID of the Poll
+		 * @return	int		Topic ID associated with Poll ID
+		 * @author			Matthias Reuter
+		 * @author			Pita <peter@randomnity.com>
+		 * @author			Cow <khlo@global-centre.com>
+		 * @sample
+		 * <code>
+		 * $ipbwi->poll->id2topicid(55);
+		 * </code>
+		 * @since			2.0
+		 */
+		public function id2topicid($pollID){
+			if(is_array($pollID)){
+				$topics = array();
+				foreach($pollID as $i => $j){
+					self::$ips->DB->query('SELECT tid FROM ibf_polls WHERE pid="'.$j.'" LIMIT 1');
+					if($row = self::$ips->DB->fetch_row()){
+						$topics[$i] = $row['tid'];
+					}else{
+						$topics[$i] = false;
+					}
+				}
+				return $topics;
+			}else{
+				self::$ips->DB->query('SELECT tid FROM ibf_polls WHERE pid="'.$pollID.'" LIMIT 1');
+				if($row = self::$ips->DB->fetch_row()){
+					return $row['tid'];
+				}else{
+					return false;
+				}
+			}
+		}
+		/**
+		 * @desc			Casts a vote in a poll.
+		 * @param	int		$topicID Topic ID of the Poll
+		 * @param	array	$optionid In format 'question number' => 'option'
+		 * @param	int		$userID If no UserID is specified, the currently logged in user will vote
+		 * @return	bool	true on success, otherwise false
+		 * @author			Matthias Reuter
+		 * @author			Pita <peter@randomnity.com>
+		 * @author			Cow <khlo@global-centre.com>
+		 * @sample
+		 * <code>
+		 * $ipbwi->poll->vote(55,'1'=>'2');
+		 * $ipbwi->poll->vote(77,'1'=>'3',55);
+		 * </code>
+		 * @since			2.0
+		 */
+		public function vote($topicID, $optionid = array('1'=>''), $userID = false){
+			if(!$this->ipbwi->member->isLoggedIn() && empty($userID)){
+				$this->ipbwi->addSystemMessage('Error',$this->ipbwi->getLibLang('membersOnly'),'Located in file <strong>'.__FILE__.'</strong> at class <strong>'.__CLASS__.'</strong> in function <strong>'.__FUNCTION__.'</strong> on line #<strong>'.__LINE__.'</strong>');
+				return false;
+			}
+			if(empty($userID) && isset(self::$ips->member['id'])){
+				$userID = self::$ips->member['id'];
+			}elseif(empty($userID) && empty(self::$ips->member['id'])){
+				$this->ipbwi->addSystemMessage('Error',$this->ipbwi->getLibLang('membersOnly'),'Located in file <strong>'.__FILE__.'</strong> at class <strong>'.__CLASS__.'</strong> in function <strong>'.__FUNCTION__.'</strong> on line #<strong>'.__LINE__.'</strong>');
+				return false;
+			}
+			if(!$this->ipbwi->permissions->has('g_vote_polls',$userID)){
+				$this->ipbwi->addSystemMessage('Error',$this->ipbwi->getLibLang('noPerms'),'Located in file <strong>'.__FILE__.'</strong> at class <strong>'.__CLASS__.'</strong> in function <strong>'.__FUNCTION__.'</strong> on line #<strong>'.__LINE__.'</strong>');
+				return false;
+			}
+			if(!is_array($optionid)){
+				$optionid = array("1" => $optionid);
+			}
+			if($this->voted($topicID)){
+				$this->ipbwi->addSystemMessage('Error',$this->ipbwi->getLibLang('pollAlreadyVoted'),'Located in file <strong>'.__FILE__.'</strong> at class <strong>'.__CLASS__.'</strong> in function <strong>'.__FUNCTION__.'</strong> on line #<strong>'.__LINE__.'</strong>');
+				return false;
+			}else{
+				// Insert Vote into Database
+				self::$ips->DB->query('SELECT * FROM ibf_polls WHERE tid="'.$topicID.'"');
+				if($row = self::$ips->DB->fetch_row()){
+					$choices = unserialize(stripslashes($row['choices']));
+					foreach($optionid as $q => $o){
+						if(!isset($choices[$q])){
+							$this->ipbwi->addSystemMessage('Error',$this->ipbwi->getLibLang('pollInvalidVote'),'Located in file <strong>'.__FILE__.'</strong> at class <strong>'.__CLASS__.'</strong> in function <strong>'.__FUNCTION__.'</strong> on line #<strong>'.__LINE__.'</strong>');
+							return false;
+						}
+						// cound single votes (radio)
+						if(!is_array($o) && (int)$o > 0){
+							if(!isset($choices[$q]['choice'][$o])){
+								$this->ipbwi->addSystemMessage('Error',$this->ipbwi->getLibLang('pollInvalidVote'),'Located in file <strong>'.__FILE__.'</strong> at class <strong>'.__CLASS__.'</strong> in function <strong>'.__FUNCTION__.'</strong> on line #<strong>'.__LINE__.'</strong>');
+								return false;
+							}
+							++$choices[$q]['votes'][$o];
+						// count multi votes (checkboxes)
+						}elseif(is_array($o) && count($o) > 0){
+							foreach($o as $s => $t){
+								if(!isset($choices[$q]['choice'][$s])){
+									$this->ipbwi->addSystemMessage('Error',$this->ipbwi->getLibLang('pollInvalidVote'),'Located in file <strong>'.__FILE__.'</strong> at class <strong>'.__CLASS__.'</strong> in function <strong>'.__FUNCTION__.'</strong> on line #<strong>'.__LINE__.'</strong>');
+									return false;
+								}
+								++$choices[$q]['votes'][$s];
+							}
+						}
+					}
+					$choices = addslashes(serialize($choices));
+					self::$ips->DB->query('UPDATE ibf_polls SET choices="'.$choices.'", votes=votes+1 WHERE tid="'.$topicID.'"');
+					self::$ips->DB->query('INSERT INTO ibf_voters (ip_address, vote_date, tid, member_id, forum_id) VALUES ("'.$_SERVER['REMOTE_ADDR'].'", "'.time().'", "'.$row['tid'].'", "'.$userID.'", "'.$row['forum_id'].'")');
+					return true;
+				}else{
+					$this->ipbwi->addSystemMessage('Error',$this->ipbwi->getLibLang('pollNotExist'),'Located in file <strong>'.__FILE__.'</strong> at class <strong>'.__CLASS__.'</strong> in function <strong>'.__FUNCTION__.'</strong> on line #<strong>'.__LINE__.'</strong>');
+					return false;
+				}
+			}
+		}
+		/**
+		 * @desc			Casts a null vote in a poll.
+		 * @param	int		$topicID Topic ID of the Poll
+		 * @return	bool	true on success, otherwise false
+		 * @author			Matthias Reuter
+		 * @author			Pita <peter@randomnity.com>
+		 * @author			Cow <khlo@global-centre.com>
+		 * @sample
+		 * <code>
+		 * $ipbwi->poll->vote(55);
+		 * </code>
+		 * @since			2.0
+		 */
+		public function nullVote($topicID){
+			// No Guests Please
+			if(!$this->ipbwi->member->isLoggedIn()){
+				$this->ipbwi->addSystemMessage('Error',$this->ipbwi->getLibLang('membersOnly'),'Located in file <strong>'.__FILE__.'</strong> at class <strong>'.__CLASS__.'</strong> in function <strong>'.__FUNCTION__.'</strong> on line #<strong>'.__LINE__.'</strong>');
+				return false;
+			}
+			if(!$this->ipbwi->permissions->has('g_vote_polls')){
+				$this->ipbwi->addSystemMessage('Error',$this->ipbwi->getLibLang('noPerms'),'Located in file <strong>'.__FILE__.'</strong> at class <strong>'.__CLASS__.'</strong> in function <strong>'.__FUNCTION__.'</strong> on line #<strong>'.__LINE__.'</strong>');
+				return false;
+			}
+			if($this->voted($topicID)){
+				$this->ipbwi->addSystemMessage('Error',$this->ipbwi->getLibLang('pollAlreadyVoted'),'Located in file <strong>'.__FILE__.'</strong> at class <strong>'.__CLASS__.'</strong> in function <strong>'.__FUNCTION__.'</strong> on line #<strong>'.__LINE__.'</strong>');
+				return false;
+			}else{
+				// Insert Vote into Database
+				self::$ips->DB->query('SELECT * FROM ibf_polls WHERE tid="'.$topicID.'"');
+				if($row = self::$ips->DB->fetch_row()){
+					self::$ips->DB->query('INSERT INTO ibf_voters (ip_address, vote_date, tid, member_id, forum_id) VALUES ("'.$_SERVER['REMOTE_ADDR'].'", "'.time().'", "'.$row['tid'].'", "'.self::$ips->member['id'].'", "'.$row['forum_id'].'")');
+					return false;
+				}else{
+					$this->ipbwi->addSystemMessage('Error',$this->ipbwi->getLibLang('pollNotExist'),'Located in file <strong>'.__FILE__.'</strong> at class <strong>'.__CLASS__.'</strong> in function <strong>'.__FUNCTION__.'</strong> on line #<strong>'.__LINE__.'</strong>');
+					return false;
+				}
+			}
+		}
+		/**
+		 * @desc			Creates a new poll.
+		 * @param	int		$topicID Topic ID of the Poll
+		 * @param	array	$question Questions.
+		 * @param	array	$choices The options to vote for for each question
+		 * @param	string	$title The title of the poll
+		 * @param	bool	$pollOnly Make the topic a poll only
+		 * @param	array	$multi To define questions as multiplechoice, declare an array via poll_multi with question-id as array-key and 1 or 0 as array-value. 1 = multiplechoice/checkbox, 0 = singlechoice/radio-button
+		 * @return	bool	true on success, otherwise false
+		 * @author			Matthias Reuter
+		 * @author			Pita <peter@randomnity.com>
+		 * @author			Cow <khlo@global-centre.com>
+		 * @sample
+		 * <code>
+		 * $ipbwi->poll->create(55,array('1' => 'Do you think IPBWI is useful?'),'1' => array('yes', 'no'),'Your opinion about IPBWI.');
+		 * </code>
+		 * @since			2.0
+		 */
+		public function create($topicID, $questions = array(), $choices = array(), $title='',$pollOnly=false,$multi=array()){
+			// Check if we can do polls
+			if($this->ipbwi->permissions->has('g_post_polls')){
+				// Check we have a good number of choices :)
+				if(!is_array($questions) && strlen($questions) > 0){
+					$questions = array($questions);
+				}
+				if(is_array($questions) AND count($questions) > 0 AND count($questions) <= self::$ips->vars['max_poll_questions']){
+					$title = ($title=='') ? $questions[0] : $title;
+					// Some last-minute checks...
+					if(count($choices) > count($questions)){
+						$choices = array(0 => $choices);
+					}
+					$thelot = array();
+					$count = 1;
+					// Check our Topic exists
+					if(!$topicinfo = $this->ipbwi->topic->info(intval($topicID))){
+						$this->ipbwi->addSystemMessage('Error',$this->ipbwi->getLibLang('topicNotExist'),'Located in file <strong>'.__FILE__.'</strong> at class <strong>'.__CLASS__.'</strong> in function <strong>'.__FUNCTION__.'</strong> on line #<strong>'.__LINE__.'</strong>');
+						return false;
+					}
+					foreach($questions as $k => $v){
+						if(is_array($choices[$k]) AND count($choices[$k]) > 1 AND count($choices[$k]) <= self::$ips->vars['max_poll_choices']){
+							if(is_array($multi) && isset($multi[$k])){
+								$is_multi = $multi[$k];
+							}else{
+								$is_multi = 0;
+							}
+							$thechoices = array(); // Init
+							$choicecount = '1';
+							foreach($choices[$k] as $i){
+								$thechoices[$choicecount] = $this->ipbwi->makeSafe($i);
+								$thevotes[$choicecount] = 0;
+								$choicecount++;
+							}
+							$thelot[$count] = array('question' => $v,'multi' => $is_multi,'choice' => $thechoices, 'votes' => $thevotes);
+							$count++;
+						}
+						else {
+							$this->ipbwi->addSystemMessage('Error',sprintf($this->ipbwi->getLibLang('pollInvalidOpts'), self::$ips->vars['max_poll_choices']),'Located in file <strong>'.__FILE__.'</strong> at class <strong>'.__CLASS__.'</strong> in function <strong>'.__FUNCTION__.'</strong> on line #<strong>'.__LINE__.'</strong>');
+							return false;
+						}
+					}
+					// Now add it into the polls table
+					self::$ips->DB->query('INSERT INTO ibf_polls VALUES ("", "'.intval($topicID).'", "'.time().'", "'.serialize($thelot).'", "'.self::$ips->member['id'].'", "0", "'.$topicinfo['forum_id'].'","'.$this->ipbwi->makeSafe($title).'","'.intval($pollOnly).'")');
+					// And change the topic's poll status to open
+					self::$ips->DB->query('UPDATE ibf_topics SET poll_state="open" WHERE tid="'.intval($topicID).'"');
+					return true;
+				}else{
+					$this->ipbwi->addSystemMessage('Error',sprintf($this->ipbwi->getLibLang('pollInvalidQuestions'), self::$ips->vars['max_poll_questions']),'Located in file <strong>'.__FILE__.'</strong> at class <strong>'.__CLASS__.'</strong> in function <strong>'.__FUNCTION__.'</strong> on line #<strong>'.__LINE__.'</strong>');
+					return false;
+				}
+			}else{
+				$this->ipbwi->addSystemMessage('Error',$this->ipbwi->getLibLang('noPerms'),'Located in file <strong>'.__FILE__.'</strong> at class <strong>'.__CLASS__.'</strong> in function <strong>'.__FUNCTION__.'</strong> on line #<strong>'.__LINE__.'</strong>');
+				return false;
+			}
+		}
+		/**
+		 * @desc			Deletes Topic-Poll
+		 * @param	int		$pollID ID of the Poll
+		 * @return	bool	true on success, otherwise false
+		 * @author			Matthias Reuter
+		 * @sample
+		 * <code>
+		 * $ipbwi->poll->delete(55);
+		 * </code>
+		 * @since			2.0
+		 */
+		public function delete($pollID){
+			self::$ips->DB->query('DELETE FROM ibf_polls WHERE pid = "'.intval($pollID).'"');
+			// Update the Topic
+			if(self::$ips->DB->query('UPDATE ibf_topics SET poll_state="0",last_vote="0",total_votes="0" WHERE tid="'.$this->id2topicid($pollID).'"')){
+				return true;
+			}else{
+				return false;
+			}
+		}
+	}
+?>
